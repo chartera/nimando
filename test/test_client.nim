@@ -1,4 +1,4 @@
-import os, strutils, nimando
+import os, strutils, nimando, asyncdispatch
 
 var cmd_params: string
 if paramCount() > 0:
@@ -6,5 +6,6 @@ if paramCount() > 0:
   params = commandLineParams()
   cmd_params = strutils.join(params, " ")
   start(cmd_params)
+  
 else:
   start()

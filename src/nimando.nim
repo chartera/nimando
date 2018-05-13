@@ -1,5 +1,5 @@
 import asyncdispatch, asyncnet, threadpool, protocol,
-        queues, crpl, strutils, tables
+        queues, crpl, strutils, tables, os
 
 var socket: AsyncSocket
 var pings: queues.Queue[string]
@@ -26,25 +26,33 @@ proc publish(cmd: string, msg: Message): void =
     for clb in clbs:
       clb(msg)
 
+var pong_loop_flag = true
 proc pong_loop() {.async.} =
   pings = initQueue[string]()
-  while true:
+  while pong_loop_flag:
+    echo "pong loop iteration"
+    pong_loop_flag = true
     await asyncdispatch.sleepAsync(9000)
-    if pings.len > 5:
+    if pings.len > 10:
       if asyncnet.isClosed(socket) == false:
         asyncnet.close(socket)
       sock_msg_line.fail(newException(ValueError, "Pong timeout"))
-      break
-    asyncdispatch.poll()
     
+  echo("BREAK PONG LOOP")
+
+var ping_loop_flag = true
 proc ping_loop(socket: AsyncSocket) {.async.} =
-  while true:
-    await asyncdispatch.sleepAsync(19000)
+  while ping_loop_flag:
+    echo "ping loop iteration"
+    await asyncdispatch.sleepAsync(9000)
     let msg = create_message("ping")
     if asyncnet.isClosed(socket) == false:
       asyncCheck asyncnet.send(socket, msg)
       pings.add(msg)
-    asyncdispatch.poll()
+    else:
+      echo("Can't send ping")
+      
+  echo("BREAK PING LOOP")
 
 proc send_authentication(): void =
   let msg = create_message("authentication", cip, session)
@@ -52,20 +60,22 @@ proc send_authentication(): void =
     
 proc try_connect_server(address: string, port: int) {.async.} =
   while true:
-    await asyncdispatch.sleepAsync(5000)
+    await asyncdispatch.sleepAsync(1000)
     try: 
       echo("Connecting to server ", address & ", port " & $ port)
       await asyncnet.connect(socket, address, port.Port)
       echo( "Successfull!")
+      ping_loop_flag = true
+      pong_loop_flag = true
       asyncdispatch.asyncCheck ping_loop(socket)
       asyncdispatch.asyncCheck pong_loop()
       break
     except:
       echo("Fail!")
+      sleep(10000)
       if asyncnet.isClosed(socket) == false:
         asyncnet.close(socket)
       socket = asyncnet.newAsyncSocket()
-    asyncdispatch.poll()
 
 proc compare_cip(servercip: string): void =
   echo("compare")
@@ -77,7 +87,6 @@ proc compare_cip(servercip: string): void =
     
 proc connect_server(address: string, port: int)
     {.async.} =
-
   await try_connect_server(address, port)
   var payload: string
   while true:
@@ -87,10 +96,15 @@ proc connect_server(address: string, port: int)
       payload = await sock_msg_line
     except:
       echo "Server connection aborted ..."
+      ping_loop_flag = false
+      pong_loop_flag = false
+      sleep(5000)
       break
     if payload.len == 0:
       echo("Server connection aborted ...")
-      await asyncdispatch.sleepAsync(10000)
+      ping_loop_flag = false
+      pong_loop_flag = false
+      sleep(5000)
       break
     else:
       let msg: Message = parse_message(payload)
@@ -98,6 +112,8 @@ proc connect_server(address: string, port: int)
         of "error":
           echo("error")
           asyncnet.close(socket)
+          ping_loop_flag = false
+          pong_loop_flag = false
           break
         of "pong":
           echo("Client receive pong message ", msg.cip)
@@ -105,7 +121,6 @@ proc connect_server(address: string, port: int)
           discard pings.pop()
         else:
           publish(msg.cmd, msg)
-    asyncdispatch.poll()   
   discard init_connection([address, $ port, cip, session])
 
 proc init_connection(params: varargs[string]): string =
@@ -121,7 +136,7 @@ proc init_connection(params: varargs[string]): string =
     asyncdispatch.asyncCheck connect_server(params[0], parseInt(params[1]))
   of "cmd":
     echo("init connection per cmd")
-    waitFor connect_server(params[0], parseInt(params[1]))
+    asyncdispatch.asyncCheck connect_server(params[0], parseInt(params[1]))
 
 proc authorization(msg: Message): void =
   echo("Authorization successfull")
@@ -142,9 +157,10 @@ proc start*(params: string): void =
   echo("Start per cmd args ", params)
   defaults()
   start_cmd(params)
+  runForever()
 
 proc start*(): void =
   modi = "repl"
   defaults()  
-  waitFor start_repl()
+  start_repl()
 
