@@ -60,7 +60,6 @@ proc send_authentication(): void =
     
 proc try_connect_server(address: string, port: int) {.async.} =
   while true:
-    await asyncdispatch.sleepAsync(1000)
     try: 
       echo("Connecting to server ", address & ", port " & $ port)
       await asyncnet.connect(socket, address, port.Port)
